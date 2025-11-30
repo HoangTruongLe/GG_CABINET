@@ -1,6 +1,6 @@
 # Labeling Guide - Extra Boards
 
-**Date**: 2025-11-28
+**Date**: 2025-11-30
 **Version**: 0.1.0-dev
 
 ---
@@ -10,10 +10,13 @@
 The labeling system now includes:
 
 ✅ **Automatic front face detection** based on intersections
-✅ **Visual label drawing** on front face
+✅ **Text-based visual labels** with index numbers, separators, and instance names
+✅ **Dynamic label scaling** with automatic sizing and margins
+✅ **Directional arrow indicators** pointing in the height direction
 ✅ **Automatic board indexing** (sequential numbering)
 ✅ **Complete ABF attributes** matching specification
 ✅ **Re-labeling support** with index updates
+✅ **Multi-line label rotation** based on face orientation
 
 ---
 
@@ -63,17 +66,37 @@ This ensures the same face is recognized as front next time.
 
 ### Step 4: Visual Label Drawn
 
-A visual label (group of edges) is drawn on the front face:
+A text-based visual label is drawn on the front face with the following components:
 
-- Rectangle outline (80mm × 40mm)
-- Center mark (cross)
-- Positioned at face center
-- Rotated based on face orientation
-- Attributes:
+**Label Components**:
+- **Index Number**: Large text (6.0mm height) showing the board index
+- **Separator**: Dash character "-" (5.0mm height)
+- **Instance Name**: Board name (5.0mm height)
+- **Direction Arrow**: Vector arrow with arrowhead pointing in height direction
+- All components are 3D text entities, flattened to face geometry
+
+**Label Layout**:
+```
+[1] - [Board_Name] →
+```
+
+**Automatic Scaling**:
+- Labels are automatically scaled to fit the face with 10mm margins
+- Maximum scale factor: 6.0x
+- Labels are positioned at face center
+- Scaling preserves text proportions
+
+**Label Positioning**:
+- Centered on the front face
+- Rotated to align arrow with face height direction
+- Additional user rotation offset can be applied (0°, 90°, 180°, 270°)
+
+**Attributes**:
   ```ruby
   [ABF] "is-label" => true
   [ABF] "label-index" => 7
   [ABF] "label-rotation" => 0
+  [ABF] "label-scale" => 2.5  # If scaled
   ```
 
 ---
@@ -166,7 +189,62 @@ Board indices: 1 - 3
 Front face: The one with 5 intersections
 Back face: The one with 1 intersection
 Label drawn on: Front face (the one with 5 intersections)
+Label content: "5 - Board_Name →"
+Label scale: Automatically calculated based on face size
 ```
+
+---
+
+## Label Format Details
+
+### Text Components
+
+**1. Index Number** (6.0mm base height)
+- Bold, filled 3D text
+- Sequential numbering (1, 2, 3, ...)
+- Positioned first (leftmost)
+
+**2. Separator** (5.0mm base height)
+- Single dash character "-"
+- Positioned after index number with 2.0mm spacing
+- Aligned vertically with index
+
+**3. Instance Name** (5.0mm base height)
+- Board entity name from SketchUp
+- Positioned after separator with 2.0mm spacing
+- Aligned vertically with index
+
+**4. Direction Arrow**
+- Horizontal line with arrowhead
+- Length: Total text width + 5.0mm
+- Arrow head: 5.0mm size
+- Points in face height direction
+- Positioned below text baseline
+
+### Automatic Scaling Algorithm
+
+The label is automatically scaled to fit the face:
+
+```ruby
+# 1. Calculate available space
+available_width = face_width - (2 × 10mm)  # 10mm margins
+available_height = face_height - (2 × 10mm)
+
+# 2. Calculate scale factors
+scale_x = available_width / label_width
+scale_y = available_height / label_height
+
+# 3. Use minimum scale, capped at 6.0x
+scale_factor = min(scale_x, scale_y, 6.0)
+
+# 4. Apply uniform scaling
+label.transform!(scale_factor)
+```
+
+**Margin Verification**:
+- Labels maintain minimum 10mm margins on all sides
+- Debug output shows actual margins after scaling
+- Warnings displayed if margins are less than expected
 
 ---
 
@@ -325,23 +403,38 @@ board.set_attribute('ABF', 'edge-band-types', [1, "CHỈ", 1.0, "#b36ea9", 1])
 
 ## Label Rotation
 
-Label rotation is calculated based on face orientation:
+Label rotation involves multiple transformations to ensure proper alignment:
 
-```ruby
-Face facing up/down (horizontal) → rotation: 0°
-Face facing front/back (vertical) → rotation: 0°
-Face facing left/right (vertical) → rotation: 90°
-```
+### Rotation Process
 
-You can manually override:
+**1. Face Alignment Transform**
+- Rotates label from local XY plane to face plane
+- Uses face normal to calculate rotation axis and angle
+
+**2. Arrow Alignment Transform**
+- Rotates label so arrow points in face height direction
+- Ensures consistent orientation across different face orientations
+
+**3. User Rotation Transform**
+- Additional 180° + user offset rotation
+- Default user offset: 0°
+- Can be set to 90°, 180°, or 270° for custom orientations
+
+### Setting Custom Rotation
 
 ```ruby
 board = Sketchup.active_model.selection.first
-board.set_attribute('ABF', 'label-rotation', 120)
+board.set_attribute('ABF', 'label-rotation', 90)  # 90° offset
 
 # Re-label to redraw with new rotation
 # Select board → Label Extra Boards
 ```
+
+**Rotation Values**:
+- `0` - Default orientation (arrow points in height direction)
+- `90` - Rotated 90° clockwise
+- `180` - Rotated 180° (arrow points opposite direction)
+- `270` - Rotated 270° clockwise (or 90° counter-clockwise)
 
 ---
 
@@ -368,14 +461,31 @@ face.set_attribute('ABF', 'is-labeled-face', true)
 1. Check if label group exists:
    ```ruby
    board.entities.grep(Sketchup::Group).each do |g|
-     puts g.get_attribute('ABF', 'is-label')
+     is_label = g.get_attribute('ABF', 'is-label')
+     if is_label
+       puts "Label found: #{g.name}"
+       puts "  Index: #{g.get_attribute('ABF', 'label-index')}"
+       puts "  Rotation: #{g.get_attribute('ABF', 'label-rotation')}"
+       puts "  Scale: #{g.get_attribute('ABF', 'label-scale')}"
+     end
    end
    ```
 
 2. Check face center is valid:
    ```ruby
    board_obj = GG_Cabinet::ExtraNesting::Board.new(board)
-   puts board_obj.front_face.center
+   puts "Front face center: #{board_obj.front_face.center}"
+   ```
+
+3. Check label dimensions:
+   ```ruby
+   board_obj = GG_Cabinet::ExtraNesting::Board.new(board)
+   label = board_obj.label
+   if label
+     puts "Label width: #{label.width} mm"
+     puts "Label height: #{label.height} mm"
+     puts "Label bounds: #{label.bounds}"
+   end
    ```
 
 ### Issue: Index not incrementing
@@ -449,7 +559,10 @@ Processing 1/1: InvalidBoard
 ## Summary
 
 ✅ **Automatic front face detection** by intersection count
-✅ **Visual labels** drawn on front face
+✅ **Text-based visual labels** with 3D text geometry
+✅ **Multi-component labels**: Index + Separator + Instance Name + Arrow
+✅ **Automatic scaling** with 10mm margins and 6.0x max scale
+✅ **Intelligent rotation** aligning arrow with face height direction
 ✅ **Sequential indexing** with auto-increment
 ✅ **Complete attributes** matching specification:
    - board-index
@@ -458,9 +571,34 @@ Processing 1/1: InvalidBoard
    - classification-key
    - edge-band-types
    - label-rotation
+   - label-scale (when scaled)
    - is-labeled-face (on front face entity)
 
 ✅ **Ready to use**!
+
+---
+
+## Advanced Features
+
+### Label Dimensions
+
+Labels provide dimension information in multiple coordinate systems:
+
+**Local Dimensions** (`label.local_dimensions`):
+- Width and height in label's local coordinate space
+- Uses bounding box dimensions
+- Returns smallest two non-zero dimensions
+
+**Face Space Dimensions** (`label.label_dimensions_in_face_space`):
+- Width and height projected onto face axes
+- Includes width_direction and height_direction vectors
+- Ensures width < height by swapping if needed
+- Used for positioning and scaling calculations
+
+**Direction Vectors**:
+- `label.width_direction` - Label's local X-axis in world space
+- `label.height_direction` - Label's local Y-axis in world space
+- Used for alignment and rotation verification
 
 ---
 
@@ -468,4 +606,4 @@ Processing 1/1: InvalidBoard
 
 ---
 
-**Last Updated**: 2025-11-28
+**Last Updated**: 2025-11-30
