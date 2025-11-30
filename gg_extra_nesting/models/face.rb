@@ -94,15 +94,21 @@ module GG_Cabinet
       def width
         return 0 unless bounds
         dimensions = face_dimensions
-        return dimensions[:width] unless dimensions[:width_direction]
-        length_to_world(dimensions[:width], dimensions[:width_direction])
+        local_w = dimensions[:width]
+        return local_w unless dimensions[:width_direction]
+        world_w = length_to_world(local_w, dimensions[:width_direction])
+        puts "  [LOG] face.width: local=#{local_w.round(1)}mm, world=#{world_w.round(1)}mm"
+        world_w
       end
       
       def height
         return 0 unless bounds
         dimensions = face_dimensions
-        return dimensions[:height] unless dimensions[:height_direction]
-        length_to_world(dimensions[:height], dimensions[:height_direction])
+        local_h = dimensions[:height]
+        return local_h unless dimensions[:height_direction]
+        world_h = length_to_world(local_h, dimensions[:height_direction])
+        puts "  [LOG] face.height: local=#{local_h.round(1)}mm, world=#{world_h.round(1)}mm"
+        world_h
       end
 
       def width_direction

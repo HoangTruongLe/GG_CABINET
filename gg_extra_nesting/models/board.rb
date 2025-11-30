@@ -324,12 +324,16 @@ module GG_Cabinet
 
       def width
         return 0 unless @front_face
-        @front_face.width
+        w = @front_face.width
+        puts "  [LOG] board.width: #{w.round(1)}mm"
+        w
       end
 
       def height
         return 0 unless @front_face
-        @front_face.height
+        h = @front_face.height
+        puts "  [LOG] board.height: #{h.round(1)}mm"
+        h
       end
 
       def thickness
@@ -491,11 +495,16 @@ module GG_Cabinet
       def remove_attributes
         return unless entity_valid?
         
+        removed_count = 0
         entity_faces.each do |face|
+          if face.get_attribute('ABF', 'is-labeled-face')
+            removed_count += 1
+          end
           face.delete_attribute('ABF', 'is-labeled-face')
           face.delete_attribute('ABF', 'is-cnced-face')
           face.delete_attribute('ABF', 'face-type')
         end
+        puts "  [LOG] remove_attributes: removed 'is-labeled-face' from #{removed_count} faces"
       end
 
     end
