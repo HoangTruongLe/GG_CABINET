@@ -1,0 +1,238 @@
+===============================================================
+GG EXTRA NESTING PLUGIN - INSTALLATION INSTRUCTIONS
+===============================================================
+
+PHASE 1: Foundation & N2 Playground Setup
+Version: 0.1.0-dev
+
+===============================================================
+QUICK START (Choose ONE method)
+===============================================================
+
+METHOD 1: Install to SketchUp (Recommended)
+---------------------------------------------------------------
+1. Locate your SketchUp Plugins folder:
+
+   Windows:
+   C:\Users\[YourUsername]\AppData\Roaming\SketchUp\SketchUp 2024\SketchUp\Plugins\
+
+   Mac:
+   ~/Library/Application Support/SketchUp 2024/SketchUp/Plugins/
+
+2. Copy the ENTIRE "GG_ExtraNesting" folder into Plugins folder
+
+3. Restart SketchUp
+
+4. Check menu: Plugins > GG Extra Nesting
+
+
+METHOD 2: Load Directly (Development/Testing)
+---------------------------------------------------------------
+1. Open SketchUp
+
+2. Open Ruby Console: Extensions > Ruby Console
+
+3. Paste and run:
+
+   load 'C:/Users/KB5007253/Desktop/tools/GG_ExtraNesting/gg_extra_nesting.rb'
+
+4. Check console for success message
+
+
+===============================================================
+VERIFICATION
+===============================================================
+
+After installation, run this in Ruby Console:
+
+    # Check version
+    GG_Cabinet::ExtraNesting::VERSION
+    # Should output: "0.1.0-dev"
+
+    # Run full test suite
+    load 'C:/Users/KB5007253/Desktop/tools/GG_ExtraNesting/test_phase1.rb'
+    # Should output: "🎉 ALL TESTS PASSED!"
+
+
+===============================================================
+FIRST TIME USAGE
+===============================================================
+
+STEP 1: Check Prerequisites
+----------------------------
+Your model MUST have a nesting root with these attributes:
+- Group with attribute: ABF > 'is-nesting-root' = true
+- Contains nested boards/sheets
+
+To check:
+1. Select your nesting root group
+2. Right-click > Entity Info > Advanced Attributes
+3. Look for: ABF > is-nesting-root = true
+
+
+STEP 2: Create N2 Playground
+----------------------------
+Menu: Plugins > GG Extra Nesting > 🎮 Dev: Create Playground
+
+or Ruby Console:
+    n2 = GG_Cabinet::ExtraNesting::PlaygroundCreator.create_or_find_playground(Sketchup.active_model)
+
+
+STEP 3: Navigate
+----------------------------
+Menu Options:
+- 🎮 Dev: Focus N1  (View original nesting)
+- 🎮 Dev: Focus N2  (View playground at X+20000mm)
+
+Ruby Console:
+    GG_Cabinet::ExtraNesting::DevTools.focus_n1
+    GG_Cabinet::ExtraNesting::DevTools.focus_n2
+
+
+STEP 4: Compare
+----------------------------
+Ruby Console:
+    GG_Cabinet::ExtraNesting::DevTools.compare_roots
+
+
+===============================================================
+USEFUL COMMANDS
+===============================================================
+
+# Get playground info
+info = GG_Cabinet::ExtraNesting::PlaygroundCreator.playground_info(Sketchup.active_model)
+puts info.inspect
+
+# Reset playground (delete and recreate)
+GG_Cabinet::ExtraNesting::PlaygroundCreator.reset_playground(Sketchup.active_model)
+
+# Delete playground
+GG_Cabinet::ExtraNesting::PlaygroundCreator.delete_playground(Sketchup.active_model)
+
+# Database stats
+GG_Cabinet::ExtraNesting::DevTools.print_db_stats
+
+# Print board info (select board first)
+board = Sketchup.active_model.selection[0]
+GG_Cabinet::ExtraNesting::DevTools.print_board_info(board)
+
+
+===============================================================
+TROUBLESHOOTING
+===============================================================
+
+ERROR: "N1 Nesting Root not found"
+---------------------------------------------------------------
+Solution: Your model needs a nesting root group
+1. Ensure you have a group with ABF > is-nesting-root = true
+2. Check Entity Info > Advanced Attributes
+
+
+ERROR: Plugin doesn't load
+---------------------------------------------------------------
+Solution: Check Ruby Console for error messages
+1. Open Extensions > Ruby Console
+2. Look for red error messages
+3. Try force reload:
+   load 'C:/path/to/GG_ExtraNesting/gg_extra_nesting.rb'
+
+
+ERROR: Can't see N2 Playground
+---------------------------------------------------------------
+Solution: Use navigation tools
+1. Menu: Dev: Focus N2
+2. Or Ruby: GG_Cabinet::ExtraNesting::DevTools.focus_n2
+3. Look for group named: __N2_Playground_ExtraNesting
+
+
+ERROR: Playground offset is wrong
+---------------------------------------------------------------
+Solution: Check offset
+1. Run: GG_Cabinet::ExtraNesting::DevTools.compare_roots
+2. Offset should be 20000mm on X-axis
+3. If wrong, reset: PlaygroundCreator.reset_playground(model)
+
+
+===============================================================
+FILE STRUCTURE
+===============================================================
+
+GG_ExtraNesting/
+├── gg_extra_nesting.rb          Main loader (RBZ entry)
+├── lib/
+│   ├── extra_nesting.rb         Plugin initialization
+│   ├── database.rb              Database system
+│   ├── dev_tools.rb             Development helpers
+│   ├── models/                  9 model files
+│   ├── services/                3 service files
+│   └── helpers/                 1 helper file
+├── README.md                    Full documentation
+├── QUICKSTART.md                Quick start guide
+├── PHASE1_COMPLETE.md           Phase 1 summary
+├── PROJECT_STATUS.md            Project status
+├── test_phase1.rb               Testing script
+└── INSTALL.txt                  This file
+
+
+===============================================================
+DOCUMENTATION
+===============================================================
+
+Full Documentation:     README.md
+Quick Start Guide:      QUICKSTART.md
+Phase 1 Summary:        PHASE1_COMPLETE.md
+Project Status:         PROJECT_STATUS.md
+Architecture:           architecture_sketch.md
+Development Plan:       dev_phase_plan.md
+Technical Specs:        nesting_plugin_specs.md
+
+
+===============================================================
+GETTING HELP
+===============================================================
+
+1. Read README.md for full documentation
+
+2. Run test script to diagnose issues:
+   load 'path/to/test_phase1.rb'
+
+3. Check Ruby Console for error messages
+
+4. Review QUICKSTART.md for common solutions
+
+
+===============================================================
+WHAT'S WORKING (Phase 1)
+===============================================================
+
+✅ Plugin architecture
+✅ Module system
+✅ Base classes (PersistentEntity)
+✅ Database system
+✅ N2 Playground creation
+✅ Playground navigation (Focus N1/N2)
+✅ DevTools helpers
+✅ Menu integration
+✅ Testing framework
+
+
+===============================================================
+WHAT'S COMING (Phase 2)
+===============================================================
+
+🚧 Board detection
+🚧 Material/thickness classification
+🚧 Board validation
+🚧 Label tool for extra boards
+🚧 Batch validation UI
+
+
+===============================================================
+CONTACT
+===============================================================
+
+GG_Cabinet Team
+Version: 0.1.0-dev
+Date: 2025-01-27
+
+===============================================================

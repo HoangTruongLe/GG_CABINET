@@ -1,0 +1,877 @@
+# ===============================================================
+# GG_Cabinet Extra Nesting - OOP Architecture
+# Improved Design with Persistence & Management
+# ===============================================================
+
+module GG_Cabinet
+  module ExtraNesting
+    
+    # ============================================================
+    # BASE CLASSES - Foundation với persistence
+    # ============================================================
+    
+    # Base class cho tất cả persistent entities
+    class PersistentEntity
+      attr_reader :id, :entity_id, :attributes
+      
+      def initialize(sketchup_entity = nil)
+        @entity = sketchup_entity
+        @entity_id = sketchup_entity&.entityID
+        @id = generate_id
+        @attributes = {}
+        load_attributes if @entity
+      end
+      
+      # Load từ SketchUp attributes
+      def load_attributes
+        return unless @entity
+        
+        dict = @entity.attribute_dictionary('ABF')
+        return unless dict
+        
+        dict.each { |key, value| @attributes[key] = value }
+      end
+      
+      # Save vào SketchUp attributes
+      def save_attributes
+        return unless @entity
+        
+        @attributes.each do |key, value|
+          @entity.set_attribute('ABF', key, value)
+        end
+      end
+      
+      # Sync với database (Dexie/LowDB)
+      def sync_to_db
+        Database.instance.save(self.class.name, @id, to_hash)
+      end
+      
+      def to_hash
+        {
+          id: @id,
+          entity_id: @entity_id,
+          attributes: @attributes,
+          class: self.class.name
+        }
+      end
+      
+      private
+      
+      def generate_id
+        "#{self.class.name.split('::').last.downcase}_#{Time.now.to_i}_#{rand(10000)}"
+      end
+    end
+    
+    # ============================================================
+    # DOMAIN MODELS
+    # ============================================================
+    
+    class Board < PersistentEntity
+      attr_reader :faces, :edge_bandings, :label
+      attr_accessor :classification_key
+      
+      def initialize(sketchup_group)
+        super(sketchup_group)
+        @faces = []
+        @edge_bandings = []
+        @label = nil
+        
+        analyze_geometry if @entity
+      end
+      
+      # Material detection
+      def material
+        @material ||= detect_material
+      end
+      
+      def material_name
+        material[:name]
+      end
+      
+      def material_display
+        material[:display_name]
+      end
+      
+      # Thickness detection
+      def thickness
+        @thickness ||= detect_thickness
+      end
+      
+      # Classification key (Material_Thickness)
+      def classification_key
+        @classification_key ||= "#{material_name}_#{thickness}"
+      end
+      
+      # Validation
+      def valid?
+        return @valid if defined?(@valid)
+        
+        @valid = validate_geometry
+      end
+      
+      def validation_errors
+        @validation_errors ||= []
+      end
+      
+      # Front/Back face helpers
+      def front_face
+        @faces.find(&:front_face?)
+      end
+      
+      def back_face
+        @faces.find(&:back_face?)
+      end
+      
+      def side_faces
+        @faces.select(&:side_face?)
+      end
+      
+      # Nesting status
+      def nested?
+        @attributes['is-nested'] == true
+      end
+      
+      def nested_in_sheet
+        @attributes['nested-in-sheet']
+      end
+      
+      # 2D projection reference
+      def projection_2d_id
+        @attributes['2d-projection-id']
+      end
+      
+      def projection_2d
+        @projection_2d ||= TwoDGroup.find_by_id(projection_2d_id)
+      end
+      
+      private
+      
+      def analyze_geometry
+        return unless @entity
+        
+        # Collect faces
+        sketchup_faces = @entity.entities.grep(Sketchup::Face)
+        @faces = sketchup_faces.map { |f| Face.new(f, self) }
+        
+        # Collect edge bandings
+        edge_band_groups = @entity.entities.grep(Sketchup::Group).select { |g|
+          g.get_attribute('ABF', 'is-edge-banding-notation')
+        }
+        @edge_bandings = edge_band_groups.map { |g| EdgeBanding.new(g, self) }
+        
+        # Find label
+        label_group = @entity.entities.grep(Sketchup::Group).find { |g|
+          g.get_attribute('ABF', 'is-label')
+        }
+        @label = Label.new(label_group, self) if label_group
+      end
+      
+      def detect_material
+        # Priority 1: Front face material
+        if front_face&.sketchup_entity&.material
+          mat = front_face.sketchup_entity.material
+          return {
+            name: normalize_material_name(mat.name),
+            display_name: mat.name,
+            color: mat.color
+          }
+        end
+        
+        # Priority 2: Group material
+        if @entity.material
+          mat = @entity.material
+          return {
+            name: normalize_material_name(mat.name),
+            display_name: mat.name,
+            color: mat.color
+          }
+        end
+        
+        # Priority 3: Default
+        {
+          name: 'Unknown',
+          display_name: 'Unknown Material',
+          color: nil
+        }
+      end
+      
+      def detect_thickness
+        bounds = @entity.bounds
+        dimensions = [bounds.width, bounds.height, bounds.depth].sort
+        thickness_mm = (dimensions.first / 1.mm).round(1)
+        
+        # Snap to common thicknesses
+        common = [8, 9, 12, 15, 17.5, 18, 20, 25, 30]
+        if common.any? { |t| (t - thickness_mm).abs < 0.5 }
+          thickness_mm = common.min_by { |t| (t - thickness_mm).abs }
+        end
+        
+        thickness_mm
+      end
+      
+      def normalize_material_name(raw_name)
+        raw_name.gsub(/[^a-zA-Z0-9]/, '_').squeeze('_')
+      end
+      
+      def validate_geometry
+        @validation_errors = []
+        
+        # Must have at least 6 faces
+        if @faces.length < 6
+          @validation_errors << "Insufficient faces (#{@faces.length} < 6)"
+          return false
+        end
+        
+        # Must have front and back faces
+        unless front_face && back_face
+          @validation_errors << "Cannot identify front/back faces"
+          return false
+        end
+        
+        # Front and back must be parallel
+        unless front_face.parallel_to?(back_face)
+          @validation_errors << "Front and back faces are not parallel"
+          return false
+        end
+        
+        # Front and back must be congruent
+        unless front_face.congruent_to?(back_face)
+          @validation_errors << "Front and back faces are not congruent"
+          return false
+        end
+        
+        return true
+      end
+    end
+    
+    # ============================================================
+    
+    class Face < PersistentEntity
+      attr_reader :board, :label, :intersections, :edge_banding
+      
+      def initialize(sketchup_face, board)
+        super(sketchup_face)
+        @board = board
+        @intersections = []
+        @edge_banding = nil
+        
+        analyze_face_type
+        collect_intersections if @entity
+      end
+      
+      # Face type detection
+      def front_face?
+        @attributes['is-labeled-face'] == true ||
+        @attributes['is-cnced-face'] == true
+      end
+      
+      def back_face?
+        return false if front_face?
+        
+        # Back face là face song song với front face
+        return false unless @board.front_face
+        
+        parallel_to?(@board.front_face) && 
+        congruent_to?(@board.front_face)
+      end
+      
+      def side_face?
+        !front_face? && !back_face?
+      end
+      
+      # Edge banding
+      def has_edge_banding?
+        @attributes['edge-band-id'].present?
+      end
+      
+      # Geometry helpers
+      def area
+        @entity&.area || 0
+      end
+      
+      def normal
+        @entity&.normal || Geom::Vector3d.new(0, 0, 1)
+      end
+      
+      def parallel_to?(other_face)
+        return false unless other_face
+        
+        normal.parallel?(other_face.normal) ||
+        normal.parallel?(other_face.normal.reverse)
+      end
+      
+      def congruent_to?(other_face, tolerance: 0.01)
+        return false unless other_face
+        
+        area_diff = (area - other_face.area).abs
+        area_diff < (area * tolerance)
+      end
+      
+      # 2D projection
+      def project_to_2d
+        return nil unless @entity
+        
+        vertices_3d = @entity.vertices.map(&:position)
+        vertices_3d.map { |v| Geom::Point3d.new(v.x, v.y, 0) }
+      end
+      
+      # Intersections
+      def has_intersections?
+        @intersections.any?
+      end
+      
+      def sketchup_entity
+        @entity
+      end
+      
+      private
+      
+      def analyze_face_type
+        # Set type based on attributes
+        if @attributes['is-labeled-face']
+          @type = :front
+        elsif @attributes['is-cnced-face']
+          @type = :front
+        end
+      end
+      
+      def collect_intersections
+        # Find intersection groups attached to this face
+        # Implementation depends on how intersections are stored
+      end
+    end
+    
+    # ============================================================
+    
+    class TwoDGroup < PersistentEntity
+      attr_reader :source_board, :label, :faces_2d, :boundary_edges
+      attr_accessor :nesting_position, :nesting_rotation
+      
+      def initialize(source_board)
+        super(nil) # Tạo mới, chưa có entity
+        @source_board = source_board
+        @faces_2d = []
+        @boundary_edges = []
+        @label = nil
+        
+        @nesting_position = nil
+        @nesting_rotation = nil
+      end
+      
+      # Create 2D projection from 3D board
+      def create_projection
+        model = Sketchup.active_model
+        
+        # Create group
+        @entity = model.entities.add_group
+        @entity_id = @entity.entityID
+        @entity.name = "__2D_#{@source_board.classification_key}_#{@source_board.entity_id}"
+        
+        # Set attributes
+        @attributes['is-2d-projection'] = true
+        @attributes['source-3d-board'] = @source_board.entity_id
+        @attributes['classification-key'] = @source_board.classification_key
+        
+        # Project front face
+        if @source_board.front_face
+          front_2d = project_face(@source_board.front_face)
+          @faces_2d << front_2d
+        end
+        
+        # Project back face (if has intersections)
+        if @source_board.back_face && @source_board.back_face.has_intersections?
+          back_2d = project_face(@source_board.back_face)
+          @faces_2d << back_2d
+        end
+        
+        # Create boundary edges (welded)
+        create_boundary_edges
+        
+        # Clone label
+        clone_label
+        
+        save_attributes
+        self
+      end
+      
+      # Bounds (2D)
+      def bounds_2d
+        return nil unless @entity
+        
+        bounds = @entity.bounds
+        {
+          min: Geom::Point3d.new(bounds.min.x, bounds.min.y, 0),
+          max: Geom::Point3d.new(bounds.max.x, bounds.max.y, 0),
+          width: bounds.width,
+          height: bounds.height
+        }
+      end
+      
+      # Apply nesting transform
+      def apply_nesting_transform(sheet, position, rotation, arrow_to_origin: true)
+        return unless @entity
+        
+        @nesting_position = position
+        @nesting_rotation = rotation
+        
+        # Calculate rotation for arrow → Y=0
+        if arrow_to_origin
+          label_rotation = @source_board.label&.rotation || 0
+          sheet_origin_y = sheet.transform.origin.y
+          
+          desired_angle = position.y > sheet_origin_y ? 270 : 90
+          rotation = (desired_angle - label_rotation) % 360
+        end
+        
+        # Build transform
+        center = @entity.bounds.center
+        
+        rot_transform = Geom::Transformation.rotation(
+          center,
+          Geom::Vector3d.new(0, 0, 1),
+          rotation.degrees
+        )
+        
+        new_center = rot_transform * center
+        offset = position - new_center
+        trans_transform = Geom::Transformation.translation(offset)
+        
+        @entity.transform!(trans_transform * rot_transform)
+        
+        # Save state
+        @attributes['nesting-rotation'] = rotation
+        @attributes['nesting-position'] = position.to_a
+        save_attributes
+      end
+      
+      # Move to sheet
+      def move_to_sheet(sheet)
+        return unless @entity && sheet.sketchup_entity
+        
+        @entity.move!(sheet.sketchup_entity.entities)
+        @attributes['parent-sheet-id'] = sheet.id
+        save_attributes
+      end
+      
+      private
+      
+      def project_face(face)
+        vertices_2d = face.project_to_2d
+        face_2d = @entity.entities.add_face(vertices_2d)
+        
+        # Ensure normal points up
+        face_2d.reverse! if face_2d.normal.z < 0
+        
+        face_2d
+      end
+      
+      def create_boundary_edges
+        # Get outline from faces
+        # Weld edges into single closed loop
+        # Implementation...
+      end
+      
+      def clone_label
+        return unless @source_board.label
+        
+        @label = @source_board.label.clone_to_2d(self)
+      end
+    end
+    
+    # ============================================================
+    
+    class Sheet < PersistentEntity
+      attr_reader :nesting_root, :boards_2d, :classification_key
+      attr_accessor :sheet_id, :material, :thickness
+      
+      def initialize(sketchup_group, nesting_root = nil)
+        super(sketchup_group)
+        @nesting_root = nesting_root
+        @boards_2d = []
+        
+        load_sheet_data if @entity
+      end
+      
+      # Classification
+      def classification_key
+        @attributes['classification-key'] || "#{material}_#{thickness}"
+      end
+      
+      # Sheet types
+      def top_sheet?
+        !@attributes['is-bottom-sheet']
+      end
+      
+      def bottom_sheet?
+        @attributes['is-bottom-sheet'] == true
+      end
+      
+      # Dimensions
+      def dimension
+        @attributes['sheet-dimension'] || [1220, 2440]
+      end
+      
+      def width
+        dimension[0]
+      end
+      
+      def height
+        dimension[1]
+      end
+      
+      # Gap analysis
+      def calculate_gaps(margin: 5.0)
+        occupied = @boards_2d.map { |b| b.bounds_2d }
+        GapCalculator.new(self, occupied, margin).find_gaps
+      end
+      
+      # Add board
+      def add_board(board_2d)
+        @boards_2d << board_2d
+        board_2d.move_to_sheet(self)
+      end
+      
+      # Transform
+      def transform
+        @entity&.transformation || Geom::Transformation.new
+      end
+      
+      def sketchup_entity
+        @entity
+      end
+      
+      private
+      
+      def load_sheet_data
+        @sheet_id = @attributes['sheet-id']
+        @material = @attributes['sheet-type']
+        @thickness = @attributes['sheet-thickness']
+        
+        # Collect 2D boards
+        collect_boards_2d
+      end
+      
+      def collect_boards_2d
+        return unless @entity
+        
+        groups_2d = @entity.entities.grep(Sketchup::Group).select { |g|
+          g.get_attribute('ABF', 'is-2d-projection')
+        }
+        
+        @boards_2d = groups_2d.map { |g| TwoDGroup.new(nil).tap { |td| td.instance_variable_set(:@entity, g) } }
+      end
+    end
+    
+    # ============================================================
+    
+    class NestingRoot < PersistentEntity
+      attr_reader :sheets
+      attr_accessor :tool_diameter, :clearance, :border_gap
+      attr_accessor :nested_from, :nested_direction, :allow_part_inside
+      
+      def initialize(sketchup_group = nil)
+        super(sketchup_group)
+        @sheets = []
+        
+        load_nesting_data if @entity
+      end
+      
+      # Find nesting root in model
+      def self.find_in_model(model)
+        root_group = model.entities.find { |e|
+          e.is_a?(Sketchup::Group) &&
+          e.get_attribute('ABF', 'is-nesting-root')
+        }
+        
+        return nil unless root_group
+        
+        new(root_group)
+      end
+      
+      # Settings
+      def tool_diameter
+        @attributes['tool-diameter'] || 6.0
+      end
+      
+      def clearance
+        @attributes['clearance'] || 3.0
+      end
+      
+      def border_gap
+        @attributes['border-gap'] || 10.0
+      end
+      
+      # Collect sheets by classification
+      def sheets_by_classification
+        @sheets.group_by(&:classification_key)
+      end
+      
+      def find_sheets_by_classification(class_key)
+        @sheets.select { |s| s.classification_key == class_key }
+      end
+      
+      # Statistics
+      def total_boards
+        @sheets.sum { |s| s.boards_2d.length }
+      end
+      
+      def classifications
+        @sheets.map(&:classification_key).uniq
+      end
+      
+      private
+      
+      def load_nesting_data
+        @tool_diameter = @attributes['tool-diameter']
+        @clearance = @attributes['clearance']
+        @border_gap = @attributes['border-gap']
+        @nested_from = @attributes['nested-from']
+        
+        # Collect sheets
+        collect_sheets
+      end
+      
+      def collect_sheets
+        return unless @entity
+        
+        sheet_groups = @entity.entities.grep(Sketchup::Group).select { |g|
+          g.get_attribute('ABF', 'sheet-id')
+        }
+        
+        @sheets = sheet_groups.map { |g| Sheet.new(g, self) }
+      end
+    end
+    
+    # ============================================================
+    
+    class Label < PersistentEntity
+      attr_reader :parent, :rotation
+      
+      def initialize(sketchup_group, parent)
+        super(sketchup_group)
+        @parent = parent # Board hoặc Face
+        @rotation = @attributes['label-rotation'] || 0
+      end
+      
+      # Clone to 2D
+      def clone_to_2d(group_2d)
+        return nil unless @entity
+        
+        # Create copy of label geometry
+        cloned_def = @entity.definition.copy
+        cloned_instance = group_2d.entity.entities.add_instance(
+          cloned_def,
+          Geom::Transformation.new
+        )
+        
+        # Position at center with correct rotation
+        center = group_2d.bounds_2d[:min] + 
+                 Geom::Vector3d.new(
+                   group_2d.bounds_2d[:width] / 2,
+                   group_2d.bounds_2d[:height] / 2,
+                   0
+                 )
+        
+        transform = Geom::Transformation.new(center)
+        rotation_transform = Geom::Transformation.rotation(
+          center,
+          Geom::Vector3d.new(0, 0, 1),
+          -@rotation.degrees
+        )
+        
+        cloned_instance.transform!(rotation_transform * transform)
+        
+        Label.new(cloned_instance, group_2d)
+      end
+    end
+    
+    # ============================================================
+    
+    class EdgeBanding < PersistentEntity
+      attr_reader :face
+      
+      def initialize(sketchup_group, face_or_board)
+        super(sketchup_group)
+        @face = face_or_board.is_a?(Face) ? face_or_board : nil
+        @board = face_or_board.is_a?(Board) ? face_or_board : nil
+      end
+      
+      def band_type
+        @attributes['edge-band-types']
+      end
+    end
+    
+    # ============================================================
+    
+    class Intersection < PersistentEntity
+      attr_reader :face
+      
+      def initialize(sketchup_group, face)
+        super(sketchup_group)
+        @face = face
+      end
+      
+      # Type detection
+      def on_back_face?
+        @attributes['intersect-on-back'] == true
+      end
+      
+      def on_top_face?
+        @attributes['intersect-on-top'] == true
+      end
+      
+      def on_side_face?
+        !on_back_face? && !on_top_face?
+      end
+      
+      def cnced?
+        @attributes['is-cnced-intersection'] == true
+      end
+      
+      def marker?
+        @attributes['is-marker'] == true
+      end
+    end
+    
+    # ============================================================
+    # SERVICES - Business Logic
+    # ============================================================
+    
+    class BoardScanner
+      def self.scan_model(model)
+        groups = model.entities.grep(Sketchup::Group)
+        
+        unlabeled = groups.select { |g|
+          !g.get_attribute('ABF', 'is-board')
+        }
+        
+        unlabeled.map { |g| Board.new(g) }
+      end
+    end
+    
+    class BoardValidator
+      def self.validate(board)
+        board.valid?
+      end
+      
+      def self.validate_batch(boards)
+        {
+          valid: boards.select(&:valid?),
+          invalid: boards.reject(&:valid?)
+        }
+      end
+    end
+    
+    class GapCalculator
+      def initialize(sheet, occupied_regions, margin)
+        @sheet = sheet
+        @occupied = occupied_regions
+        @margin = margin
+      end
+      
+      def find_gaps
+        # Sweep line algorithm
+        # Returns array of Gap objects
+        []
+      end
+    end
+    
+    class NestingEngine
+      def initialize(settings)
+        @settings = settings
+      end
+      
+      def nest_boards(boards, nesting_root)
+        # Group by classification
+        grouped = boards.group_by(&:classification_key)
+        
+        results = []
+        
+        grouped.each do |class_key, boards_group|
+          class_results = nest_classification_group(
+            class_key,
+            boards_group,
+            nesting_root
+          )
+          results.concat(class_results)
+        end
+        
+        results
+      end
+      
+      private
+      
+      def nest_classification_group(class_key, boards, nesting_root)
+        # Find or create sheets
+        sheets = nesting_root.find_sheets_by_classification(class_key)
+        
+        # Convert to 2D
+        boards_2d = boards.map { |b| TwoDGroup.new(b).create_projection }
+        
+        # Place boards
+        # ...
+      end
+    end
+    
+    # ============================================================
+    # HELPERS
+    # ============================================================
+    
+    module GeometryHelpers
+      def self.project_point_to_xy(point)
+        Geom::Point3d.new(point.x, point.y, 0)
+      end
+      
+      def self.calculate_2d_bounds(points)
+        xs = points.map(&:x)
+        ys = points.map(&:y)
+        
+        {
+          min: Geom::Point3d.new(xs.min, ys.min, 0),
+          max: Geom::Point3d.new(xs.max, ys.max, 0),
+          width: xs.max - xs.min,
+          height: ys.max - ys.min
+        }
+      end
+      
+      def self.weld_edges(edges)
+        # Weld edges into single closed loop
+        # Implementation...
+      end
+    end
+    
+    # ============================================================
+    # DATABASE - Persistence Layer
+    # ============================================================
+    
+    class Database
+      include Singleton
+      
+      def initialize
+        @store = {}
+      end
+      
+      def save(table, id, data)
+        @store[table] ||= {}
+        @store[table][id] = data
+      end
+      
+      def find(table, id)
+        @store.dig(table, id)
+      end
+      
+      def find_by(table, conditions)
+        return [] unless @store[table]
+        
+        @store[table].values.select do |record|
+          conditions.all? { |k, v| record[k] == v }
+        end
+      end
+      
+      def export_to_json
+        JSON.pretty_generate(@store)
+      end
+    end
+    
+  end
+end

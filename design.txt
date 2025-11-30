@@ -1,0 +1,182 @@
+module GG_Cabinet
+	module ExtraNesting
+		class Account
+			has_many: :pcs
+			:email
+			:name
+			:password
+			:facebook
+			:google
+			:expiration
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class PC
+			:mac
+			:ip_address
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class Board
+			has_many: :faces
+			has_many :edge_bandings
+			def matterial; end
+			def thickness; end
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class Face
+			has_one :label
+			has_many :intersections
+			has_one :edge_banding
+			def front_face; end
+			def back_face; end
+			def side_faces; end
+			def is_front_face; end
+			def is_back_face; end
+			def is_side_faces; end
+			def has_edge_banding; end
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class EdgeBanding
+			belongs_to :face
+		end
+		
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class Sheet
+			belongs_to :nesting_root
+			has_many :faces
+			def back_sheet; end
+			def top_sheet; end
+			def is_back_sheet; end
+			def is_top_sheet; end
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class NestingRoot
+			has_many :sheets
+			def tool_diameter; end
+			def find_and_set_tool_diameter; end
+			def clearance; end
+			def find_and_set_clearance; end
+			def border_gap; end
+			def find_and_set_border_gap; end
+			def nested_from; end
+			def nested_direction; end
+			def allow_part_inside; end
+			
+			def find_nesting_root_group(model)
+			def collect_front_sheets(root_group)
+			# --------------------
+      # SETTINGS DB – PERSISTENCE
+      # --------------------
+
+      def self.default_schema
+        {
+          auto_tool_dia:         nil,            # mm
+          auto_clearance:        nil,            # mm
+          auto_border_gap:       nil,            # mm
+          auto_nested_from:      'bottom_left',  # mặc định
+          auto_nested_direction: 'x_then_y',     # mặc định
+
+          user_tool_dia:         nil, # mm
+          user_clearance:        nil, # mm
+          user_border_gap:       nil, # mm
+          user_nested_from:      nil,
+          user_nested_direction: nil,
+
+          allow_rotate:          true,   # default: cho phép xoay
+          allow_part_inside:     false,  # default: không cho phép part inside
+					use_mark_square:       true,
+          updated_at:            nil
+        }
+      end
+
+      # Đảm bảo dict settings tồn tại, nếu chưa thì tạo default
+      def self.ensure_database!(model = Sketchup.active_model)
+        log "ensure_database!: begin"
+        dict = model.attribute_dictionary(DICT_NAME, false)
+
+        if dict
+          log "ensure_database!: found existing dict=#{DICT_NAME}, keys=#{dict.length}"
+          settings = load(model)
+        else
+          log "ensure_database!: dict=#{DICT_NAME} not found. Creating default schema..."
+          settings = default_schema
+          save(settings, model)
+          log "ensure_database!: default schema saved."
+        end
+
+        log "ensure_database!: done."
+        settings
+      end
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class Label
+			belongs_to :face
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		class Intersection
+			belongs_to :face
+			def is_on_face_back; end
+			def is_on_face_top; end
+			def is_on_face_side; end
+			def is_cnced_intersection; end
+			def is_marker; end
+		end
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		geometry helpers
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		geometry helpers
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		geometry helpers
+	end
+end
+
+module GG_Cabinet
+	module ExtraNesting
+		settings helpers
+	end
+end
+
+
