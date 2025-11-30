@@ -37,12 +37,14 @@ module GG_Cabinet
 
       def width
         return 0 unless @entity && @entity.valid?
-        local_dimensions[:width]
+        dimensions = local_dimensions
+        length_to_world(dimensions[:width], dimensions[:width_direction])
       end
 
       def height
         return 0 unless @entity && @entity.valid?
-        local_dimensions[:height]
+        dimensions = local_dimensions
+        length_to_world(dimensions[:height], dimensions[:height_direction])
       end
 
       def center
@@ -61,6 +63,27 @@ module GG_Cabinet
       end
 
       private
+
+      def length_to_world(local_length, direction)
+        return local_length unless @board && direction
+        
+        transform = parent_transformation
+        return local_length unless transform
+        
+        origin = Geom::Point3d.new(0, 0, 0)
+        unit_vector = direction.normalize
+        end_point = origin.offset(unit_vector, local_length.mm)
+        
+        world_origin = transform * origin
+        world_end = transform * end_point
+        
+        world_origin.distance(world_end) / 1.mm
+      end
+      
+      def parent_transformation
+        return nil unless @board && @board.entity && @board.entity.valid?
+        @board.entity.transformation
+      end
 
       def local_dimensions
         return { width: 0, height: 0 } unless @entity && @entity.valid?
@@ -183,21 +206,29 @@ module GG_Cabinet
       end
 
       def scale_label
+        puts "  [LOG] scale_label called"
         return unless @entity && @entity.valid?
         
         label_w = width
         label_h = height
+        puts "  [LOG] label dimensions: #{label_w} × #{label_h}"
         return if label_w == 0 || label_h == 0
         
         front_face = @board.front_face
         return unless front_face
         
-        scale_factor = calculate_scale_factor(front_face.width.to_f, front_face.height.to_f, label_w, label_h)
+        face_w = front_face.width.to_f
+        face_h = front_face.height.to_f
+        puts "  [LOG] front_face dimensions: #{face_w} × #{face_h}"
+        
+        scale_factor = calculate_scale_factor(face_w, face_h, label_w, label_h)
+        puts "  [LOG] scale_factor: #{scale_factor}"
         
         if scale_factor != 1.0
           apply_scale(@entity, scale_factor)
           @entity.set_attribute('ABF', 'label-scale', scale_factor) if @entity.valid?
         end
+        puts "  [LOG] label entity valid after scale: #{@entity.valid?}"
       end
 
       def calculate_scale_factor(face_width, face_height, label_width, label_height)
@@ -221,14 +252,23 @@ module GG_Cabinet
       end
 
       def move_label_to_face(label_group)
+        puts "  [LOG] move_label_to_face called"
         front_face = @board.front_face
-        return unless front_face&.valid?
+        unless front_face&.valid?
+          puts "  [LOG] front_face invalid, returning"
+          return
+        end
 
         face_normal = front_face.normal
         height_dir = front_face.height_direction
-        return unless face_normal && height_dir
+        unless face_normal && height_dir
+          puts "  [LOG] face_normal or height_dir nil, returning"
+          return
+        end
+        puts "  [LOG] face_normal: #{face_normal.to_a}, height_dir: #{height_dir.to_a}"
         
         label_center = label_group.bounds.center
+        puts "  [LOG] label_center: #{label_center.to_a}"
         
         face_transform = create_face_alignment_transform(face_normal)
         arrow_transform = create_arrow_alignment_transform(face_normal, height_dir, face_transform)
@@ -239,6 +279,8 @@ module GG_Cabinet
         
         translation = Geom::Transformation.translation(front_face.center - rotated_center)
         label_group.transform!(translation * rotation)
+        puts "  [LOG] Label final position: #{label_group.bounds.center.to_a}"
+        puts "  [LOG] Label valid after move: #{label_group.valid?}"
       end
 
       def create_face_alignment_transform(face_normal)
@@ -296,6 +338,5 @@ module GG_Cabinet
 
       ORIGIN = Geom::Point3d.new(0, 0, 0)
     end
-
   end
 end
