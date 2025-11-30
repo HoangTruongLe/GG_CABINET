@@ -36,6 +36,12 @@ module GG_Cabinet
         @entity.get_attribute('ABF', 'is-labeled-face') == true
       end
 
+      def labelable?
+        return false unless @entity && @board
+        largest_faces = @board.faces.first(2)
+        largest_faces.include?(self)
+      end
+
       def back_face?
         # Back face is parallel and congruent to front, but not the front itself
         return false unless @board
@@ -88,13 +94,21 @@ module GG_Cabinet
       def width
         return 0 unless bounds
         dimensions = face_dimensions
-        dimensions[:width]
+        local_w = dimensions[:width]
+        return local_w unless dimensions[:width_direction]
+        world_w = length_to_world(local_w, dimensions[:width_direction])
+        puts "  [LOG] face.width: local=#{local_w.round(1)}mm, world=#{world_w.round(1)}mm"
+        world_w
       end
-
+      
       def height
         return 0 unless bounds
         dimensions = face_dimensions
-        dimensions[:height]
+        local_h = dimensions[:height]
+        return local_h unless dimensions[:height_direction]
+        world_h = length_to_world(local_h, dimensions[:height_direction])
+        puts "  [LOG] face.height: local=#{local_h.round(1)}mm, world=#{world_h.round(1)}mm"
+        world_h
       end
 
       def width_direction
@@ -280,6 +294,8 @@ module GG_Cabinet
         edges = @entity.edges
         return { width: 0, height: 0, width_direction: nil, height_direction: nil } if edges.empty?
 
+        puts "  [LOG] face_dimensions: #{edges.count} edges, #{vertices.count} vertices"
+        
         edge_lengths = edges.map do |edge|
           start_pt = edge.start.position
           end_pt = edge.end.position
@@ -289,6 +305,7 @@ module GG_Cabinet
         end
 
         edge_lengths.sort_by! { |e| -e[:length] }
+        puts "  [LOG] edge lengths (sorted): #{edge_lengths.map { |e| e[:length].round(1) }.first(6).join(', ')}"
 
         longest_edge = edge_lengths[0]
         height_direction = longest_edge[:direction]
@@ -298,6 +315,7 @@ module GG_Cabinet
           dot = e[:direction].dot(height_direction).abs
           dot < 0.1
         end
+        puts "  [LOG] perpendicular edges count: #{perpendicular_edges.count}"
 
         if perpendicular_edges.empty?
           width_direction = face_normal * height_direction
@@ -305,6 +323,7 @@ module GG_Cabinet
           
           width_projections = points.map { |p| p.to_a.zip(width_direction.to_a).map { |a, b| a * b }.sum }
           face_width = (width_projections.max - width_projections.min) / 1.mm
+          puts "  [LOG] No perpendicular edges, calculated width from projections: #{face_width.round(1)}"
         else
           width_edge = perpendicular_edges[0]
           width_direction = width_edge[:direction]
@@ -315,6 +334,8 @@ module GG_Cabinet
           face_width, face_height = face_height, face_width
           width_direction, height_direction = height_direction, width_direction
         end
+        
+        puts "  [LOG] final face_dimensions: #{face_width.round(1)} × #{face_height.round(1)}"
 
         {
           width: face_width,
@@ -322,6 +343,28 @@ module GG_Cabinet
           width_direction: width_direction,
           height_direction: height_direction
         }
+      end
+
+      def length_to_world(local_length, direction)
+        return local_length unless @board
+        return local_length unless direction
+        
+        transform = parent_transformation
+        return local_length unless transform
+        
+        origin = Geom::Point3d.new(0, 0, 0)
+        unit_vector = direction.normalize
+        end_point = origin.offset(unit_vector, local_length.mm)
+        
+        world_origin = transform * origin
+        world_end = transform * end_point
+        
+        world_origin.distance(world_end) / 1.mm
+      end
+      
+      def parent_transformation
+        return nil unless @board && @board.entity && @board.entity.valid?
+        @board.entity.transformation
       end
     end
   end

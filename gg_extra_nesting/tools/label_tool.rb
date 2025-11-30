@@ -55,9 +55,6 @@ module GG_Cabinet
                 next
               end
 
-              # Check if already labeled
-              was_labeled = entity.get_attribute('ABF', 'is-extra-board') == true
-
               # Label the board with all required attributes
               label_board(entity, board, current_index)
 

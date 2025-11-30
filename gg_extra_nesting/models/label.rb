@@ -37,12 +37,22 @@ module GG_Cabinet
 
       def width
         return 0 unless @entity && @entity.valid?
-        local_dimensions[:width]
+        b = @entity.bounds
+        dims = [b.width / 1.mm, b.height / 1.mm, b.depth / 1.mm].select { |d| d > 0.1 }.sort
+        return 0 if dims.empty?
+        w = dims[0]
+        puts "  [LOG] label.width: #{w.round(1)}mm (from bounds, using smallest non-zero dimension)"
+        w
       end
 
       def height
         return 0 unless @entity && @entity.valid?
-        local_dimensions[:height]
+        b = @entity.bounds
+        dims = [b.width / 1.mm, b.height / 1.mm, b.depth / 1.mm].select { |d| d > 0.1 }.sort
+        return 0 if dims.length < 2
+        h = dims[1]
+        puts "  [LOG] label.height: #{h.round(1)}mm (from bounds, using second largest dimension)"
+        h
       end
 
       def center
@@ -62,22 +72,48 @@ module GG_Cabinet
 
       private
 
+      def length_to_world(local_length, direction)
+        return local_length unless @board && direction
+        
+        transform = parent_transformation
+        return local_length unless transform
+        
+        origin = Geom::Point3d.new(0, 0, 0)
+        unit_vector = direction.normalize
+        end_point = origin.offset(unit_vector, local_length.mm)
+        
+        world_origin = transform * origin
+        world_end = transform * end_point
+        
+        world_origin.distance(world_end) / 1.mm
+      end
+      
+      def parent_transformation
+        return nil unless @board && @board.entity && @board.entity.valid?
+        @board.entity.transformation
+      end
+
       def local_dimensions
-        return { width: 0, height: 0 } unless @entity && @entity.valid?
+        return { width: 0, height: 0, width_direction: nil, height_direction: nil } unless @entity && @entity.valid?
         
         label_bounds = @entity.bounds
-        return { width: 0, height: 0 } unless label_bounds
+        return { width: 0, height: 0, width_direction: nil, height_direction: nil } unless label_bounds
         
-        dims = [
-          (label_bounds.max.x - label_bounds.min.x) / 1.mm,
-          (label_bounds.max.y - label_bounds.min.y) / 1.mm,
-          (label_bounds.max.z - label_bounds.min.z) / 1.mm
-        ].select { |d| d > 0.1 }.sort
+        dim_data = [
+          { length: (label_bounds.max.x - label_bounds.min.x) / 1.mm, direction: X_AXIS },
+          { length: (label_bounds.max.y - label_bounds.min.y) / 1.mm, direction: Y_AXIS },
+          { length: (label_bounds.max.z - label_bounds.min.z) / 1.mm, direction: Z_AXIS }
+        ].select { |d| d[:length] > 0.1 }.sort_by { |d| d[:length] }
         
-        case dims.length
-        when 0 then { width: 0, height: 0 }
-        when 1 then { width: dims[0], height: dims[0] }
-        else { width: dims[0], height: dims[1] }
+        case dim_data.length
+        when 0
+          { width: 0, height: 0, width_direction: nil, height_direction: nil }
+        when 1
+          { width: dim_data[0][:length], height: dim_data[0][:length],
+            width_direction: dim_data[0][:direction], height_direction: dim_data[0][:direction] }
+        else
+          { width: dim_data[0][:length], height: dim_data[1][:length],
+            width_direction: dim_data[0][:direction], height_direction: dim_data[1][:direction] }
         end
       end
 
@@ -183,34 +219,45 @@ module GG_Cabinet
       end
 
       def scale_label
+        puts "  [LOG] scale_label called"
         return unless @entity && @entity.valid?
         
         label_w = width
         label_h = height
+        puts "  [LOG] label dimensions: #{label_w} × #{label_h}"
         return if label_w == 0 || label_h == 0
         
         front_face = @board.front_face
         return unless front_face
         
-        scale_factor = calculate_scale_factor(front_face.width.to_f, front_face.height.to_f, label_w, label_h)
+        face_w = front_face.width.to_f
+        face_h = front_face.height.to_f
+        puts "  [LOG] front_face dimensions: #{face_w} × #{face_h}"
+        
+        scale_factor = calculate_scale_factor(face_w, face_h, label_w, label_h)
+        puts "  [LOG] scale_factor: #{scale_factor}"
         
         if scale_factor != 1.0
           apply_scale(@entity, scale_factor)
           @entity.set_attribute('ABF', 'label-scale', scale_factor) if @entity.valid?
         end
+        puts "  [LOG] label entity valid after scale: #{@entity.valid?}"
       end
 
       def calculate_scale_factor(face_width, face_height, label_width, label_height)
+        puts "  [LOG] calculate_scale_factor: face=#{face_width.round(1)}×#{face_height.round(1)}, label=#{label_width.round(1)}×#{label_height.round(1)}"
         return 1.0 if [face_width, face_height, label_width, label_height].any? { |v| v <= 0 }
 
         total_offset = BORDER_OFFSET * 2.0
         available_width = face_width - total_offset
         available_height = face_height - total_offset
+        puts "  [LOG] available space: #{available_width.round(1)}×#{available_height.round(1)} (after #{total_offset}mm borders)"
         
         return 1.0 if available_width <= 0 || available_height <= 0
         
         scale_x = available_width / label_width
         scale_y = available_height / label_height
+        puts "  [LOG] scale_x=#{scale_x.round(2)}, scale_y=#{scale_y.round(2)}, min=#{[scale_x, scale_y].min.round(2)}, max=#{MAX_SCALE}"
         
         [[scale_x, scale_y].min, MAX_SCALE].min
       end
@@ -221,24 +268,65 @@ module GG_Cabinet
       end
 
       def move_label_to_face(label_group)
+        puts "  [LOG] move_label_to_face called"
         front_face = @board.front_face
-        return unless front_face&.valid?
+        unless front_face&.valid?
+          puts "  [LOG] front_face invalid, returning"
+          return
+        end
 
         face_normal = front_face.normal
         height_dir = front_face.height_direction
-        return unless face_normal && height_dir
+        unless face_normal && height_dir
+          puts "  [LOG] face_normal or height_dir nil, returning"
+          return
+        end
+        puts "  [LOG] face_normal: #{face_normal.to_a}, height_dir: #{height_dir.to_a}"
         
         label_center = label_group.bounds.center
         
-        face_transform = create_face_alignment_transform(face_normal)
-        arrow_transform = create_arrow_alignment_transform(face_normal, height_dir, face_transform)
-        user_transform = create_user_rotation_transform(face_normal, @board.label_rotation)
+        z_up = Geom::Vector3d.new(0, 0, 1)
+        rotation_axis = z_up * face_normal
+        if rotation_axis.length < 0.001
+          rotation_axis = Geom::Vector3d.new(1, 0, 0)
+        else
+          rotation_axis.normalize!
+        end
         
-        rotation = user_transform * arrow_transform * face_transform
-        rotated_center = rotation * label_center
+        angle = z_up.angle_between(face_normal)
+        face_rotation = Geom::Transformation.rotation(ORIGIN, rotation_axis, angle)
         
-        translation = Geom::Transformation.translation(front_face.center - rotated_center)
-        label_group.transform!(translation * rotation)
+        arrow_dir = Geom::Vector3d.new(1, 0, 0)
+        rotated_arrow = face_rotation * arrow_dir
+        
+        dot_product = height_dir.dot(face_normal)
+        projection = Geom::Vector3d.new(
+          face_normal.x * dot_product,
+          face_normal.y * dot_product,
+          face_normal.z * dot_product
+        )
+        height_on_plane = height_dir - projection
+        height_on_plane.normalize! if height_on_plane.length > 0.001
+        
+        arrow_angle = rotated_arrow.angle_between(height_on_plane)
+        cross = rotated_arrow * height_on_plane
+        arrow_angle = -arrow_angle if cross.dot(face_normal) < 0
+        
+        arrow_rotation = Geom::Transformation.rotation(ORIGIN, face_normal, arrow_angle)
+        user_rotation = Geom::Transformation.rotation(ORIGIN, face_normal, (@board.label_rotation + 180) * Math::PI / 180.0)
+        
+        full_rotation = user_rotation * arrow_rotation * face_rotation
+        rotated_center = full_rotation * label_center
+        
+        offset = face_normal.clone
+        offset.length = 0.01.mm
+        target_position = front_face.center.offset(offset)
+        
+        translation = Geom::Transformation.translation(target_position - rotated_center)
+        label_group.transform!(translation * full_rotation)
+        
+        puts "  [LOG] Label final position: #{label_group.bounds.center.to_a}"
+        puts "  [LOG] Label valid after move: #{label_group.valid?}"
       end
 
       def create_face_alignment_transform(face_normal)
@@ -296,6 +384,5 @@ module GG_Cabinet
 
       ORIGIN = Geom::Point3d.new(0, 0, 0)
     end
-
   end
 end

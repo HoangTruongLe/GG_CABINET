@@ -24,14 +24,21 @@ module GG_Cabinet
         @edge_bandings = []
         @label = nil
 
+        #todo: implement remove_attributes
+        remove_attributes
+
         # Detect board properties
         detect_faces
         detect_material
-        detect_thickness
         detect_label
 
         # Generate classification key
         @classification_key = generate_classification_key
+        
+        if @front_face
+          is_marked = @front_face.entity.get_attribute('ABF', 'is-labeled-face')
+          puts "  [LOG] Board initialized, front_face marked: #{is_marked}, entity valid: #{@front_face.entity.valid?}"
+        end
       end
 
       # =================================================================
@@ -66,40 +73,6 @@ module GG_Cabinet
       end
 
       # =================================================================
-      # Thickness Detection
-      # =================================================================
-
-      def detect_thickness
-        return nil unless entity_valid?
-
-        bounds = @entity.bounds
-
-        # Get all three dimensions
-        dimensions = [
-          bounds.width,
-          bounds.height,
-          bounds.depth
-        ].map { |d| d / 1.mm }.sort
-
-        # Thickness is the smallest dimension
-        raw_thickness = dimensions.first
-
-        # Round to 1 decimal place
-        thickness_mm = raw_thickness.round(1)
-
-        # Snap to common thicknesses if close enough
-        common_match = COMMON_THICKNESSES.find do |common_t|
-          (common_t - thickness_mm).abs < THICKNESS_TOLERANCE
-        end
-
-        @thickness_mm = common_match || thickness_mm
-      end
-
-      def thickness
-        @thickness_mm || 0.0
-      end
-
-      # =================================================================
       # Face Detection
       # =================================================================
 
@@ -112,62 +85,83 @@ module GG_Cabinet
       end
 
       def detect_front_back_faces
+        puts "  [LOG] detect_front_back_faces called, faces count: #{@faces.count}"
         return if @faces.empty?
 
-        # Check if any face is already marked as labeled face
         labeled_face = @faces.find do |face|
           face.entity.get_attribute('ABF', 'is-labeled-face') == true
         end
+        puts "  [LOG] labeled_face found: #{labeled_face ? 'yes' : 'no'}"
 
         if labeled_face
-          # Use existing labeled face as front
           @front_face = labeled_face
-
-          # Find back face (parallel to front)
           @back_face = @faces.find do |face|
             face != @front_face &&
             face.parallel_to?(labeled_face) &&
             face.congruent_to?(labeled_face)
           end
+          puts "  [LOG] Using existing labeled face as front"
         else
-          # Auto-detect based on intersections
-          # Face with more intersections becomes front face
+          puts "  [LOG] No labeled face found, calling detect_front_by_intersections"
           detect_front_by_intersections
+        end
+        
+        if @front_face
+          is_marked = @front_face.entity.get_attribute('ABF', 'is-labeled-face')
+          puts "  [LOG] After detect_front_back_faces, front_face marked: #{is_marked}"
         end
       end
 
       def detect_front_by_intersections
-        # Get the two largest parallel congruent faces
+        puts "  [LOG] detect_front_by_intersections called"
         candidate_faces = find_parallel_congruent_faces
+        puts "  [LOG] candidate_faces count: #{candidate_faces.count}"
 
-        if candidate_faces.count >= 2
-          face1 = candidate_faces[0]
-          face2 = candidate_faces[1]
-
-          # Count intersections on each face
-          face1_intersections = face1.intersections.count
-          face2_intersections = face2.intersections.count
-
-          # Face with more intersections becomes front
-          if face1_intersections > face2_intersections
-            @front_face = face1
-            @back_face = face2
-          elsif face2_intersections > face1_intersections
-            @front_face = face2
-            @back_face = face1
-          else
-            # Equal intersections - use first as front
-            @front_face = face1
-            @back_face = face2
-          end
-        elsif candidate_faces.count == 1
-          @front_face = candidate_faces[0]
-          @back_face = nil
-        else
-          # Fallback to largest face
-          @front_face = @faces.first
-          @back_face = nil
+        unless candidate_faces.count >= 2
+          raise ArgumentError, "Board must have at least 2 parallel congruent faces"
         end
+      
+        face1 = candidate_faces[0]
+        face2 = candidate_faces[1]
+        puts "  [LOG] face1.labelable?: #{face1.labelable?}, face2.labelable?: #{face2.labelable?}"
+
+        unless face1.labelable? || face2.labelable?
+          raise ArgumentError, "Face 1 and face 2 are not labelable"
+        end
+        
+        board_persistent_id = @entity.persistent_id.to_s
+        stored_face_id = Sketchup.read_default('GG_ExtraNesting', board_persistent_id, nil)
+        puts "  [LOG] board_persistent_id: #{board_persistent_id}, stored_face_id: #{stored_face_id}"
+
+        face1_intersections = face1.intersections.count
+        face2_intersections = face2.intersections.count
+        puts "  [LOG] face1_intersections: #{face1_intersections}, face2_intersections: #{face2_intersections}"
+        
+        if face1_intersections > face2_intersections
+          puts "  [LOG] face1 has more intersections - using as front"
+          @front_face = create_front_face(face1)
+          @back_face = create_back_face(face2)
+        elsif face2_intersections > face1_intersections
+          puts "  [LOG] face2 has more intersections - using as front"
+          @front_face = create_front_face(face2)
+          @back_face = create_back_face(face1)
+        else
+          puts "  [LOG] Equal intersections - using face1 as front"
+          @front_face = create_front_face(face1)
+          @back_face = create_back_face(face2)
+        end
+        puts "  [LOG] @front_face set: #{@front_face ? 'yes' : 'no'}"
+      end
+
+      def create_front_face(face)
+        puts "  [LOG] create_front_face called"
+        face.entity.set_attribute('ABF', 'is-labeled-face', true)
+        face
+      end
+
+      def create_back_face(face)
+        face.entity.delete_attribute('ABF', 'is-labeled-face')
+        face
       end
 
       def find_parallel_congruent_faces
@@ -235,9 +229,16 @@ module GG_Cabinet
       end
       
       def create_label(new_label_index)
-        return nil unless entity_valid? && front_face
+        puts "  [LOG] create_label called with index: #{new_label_index}"
+        puts "  [LOG] entity_valid?: #{entity_valid?}, front_face: #{front_face ? 'exists' : 'nil'}"
+        
+        unless entity_valid? && front_face
+          puts "  [LOG] create_label returning nil - missing entity or front_face"
+          return nil
+        end
 
         @label = Label.new(self, new_label_index)
+        puts "  [LOG] Label created: #{@label ? @label.entity : 'nil'}"
         @label
       end
 
@@ -267,16 +268,10 @@ module GG_Cabinet
       # =================================================================
 
       def generate_classification_key
-        # Format: "Material_Thickness"
-        # Example: "Color A02_17.5", "Veneer Oak_25.0"
-        # Material can be nil: "nil_17.5"
-        mat_name = material_name || 'nil'
-        "#{mat_name}_#{thickness}"
+        return nil unless front_face
+        
+        "#{material_name}_#{thickness}"
       end
-
-      # =================================================================
-      # Validation
-      # =================================================================
 
       def valid?
         validation_errors.empty?
@@ -304,11 +299,6 @@ module GG_Cabinet
           end
         end
 
-        # Material can be nil - no validation needed for material
-
-        # Check thickness
-        errors << "Thickness is zero or invalid" if thickness <= 0
-
         # Side faces should be rectangular (front/back can be any shape)
         unless side_faces_rectangular?
           errors << "Side faces are not rectangular"
@@ -332,25 +322,52 @@ module GG_Cabinet
       # Dimensions
       # =================================================================
 
-      def bounds
-        @entity.bounds
-      end
-
       def width
-        bounds.width / 1.mm
+        return 0 unless @front_face
+        w = @front_face.width
+        puts "  [LOG] board.width: #{w.round(1)}mm"
+        w
       end
 
       def height
-        bounds.height / 1.mm
+        return 0 unless @front_face
+        h = @front_face.height
+        puts "  [LOG] board.height: #{h.round(1)}mm"
+        h
       end
 
-      def depth
-        bounds.depth / 1.mm
+      def thickness
+        return 0 unless @front_face && entity_valid?
+        
+        direction = thickness_direction
+        return 0 unless direction
+        
+        vertices = entity_faces.flat_map(&:vertices).uniq
+        return 0 if vertices.empty?
+        
+        local_points = vertices.map(&:position)
+        projections = local_points.map { |pt| pt.to_a.zip(direction.to_a).map { |a, b| a * b }.sum }
+        
+        (projections.max - projections.min) / 1.mm
+      end
+
+      def width_direction
+        return nil unless @front_face
+        @front_face.width_direction
+      end
+
+      def height_direction
+        return nil unless @front_face
+        @front_face.height_direction
+      end
+
+      def thickness_direction
+        return nil unless @front_face
+        @front_face.normal
       end
 
       def dimensions
-        dims = [width, height, depth].sort.reverse
-        { length: dims[0], width: dims[1], thickness: dims[2] }
+        { width: width, height: height, thickness: thickness }
       end
 
       # =================================================================
@@ -473,6 +490,21 @@ module GG_Cabinet
 
       def collect_faces
         entity_faces.map { |face_entity| Face.new(face_entity, self) }
+      end
+
+      def remove_attributes
+        return unless entity_valid?
+        
+        removed_count = 0
+        entity_faces.each do |face|
+          if face.get_attribute('ABF', 'is-labeled-face')
+            removed_count += 1
+          end
+          face.delete_attribute('ABF', 'is-labeled-face')
+          face.delete_attribute('ABF', 'is-cnced-face')
+          face.delete_attribute('ABF', 'face-type')
+        end
+        puts "  [LOG] remove_attributes: removed 'is-labeled-face' from #{removed_count} faces"
       end
 
     end
